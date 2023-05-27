@@ -208,7 +208,8 @@ main(int argc, char *argv[])
 				redraw(first, height, width, font);
 				break;
 			case XK_Return:
-				puts(selected->s);
+				if (selected)
+					puts(selected->s);
 				exit(0);
 				/* NOTREACHED */
 			}
