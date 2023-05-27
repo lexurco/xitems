@@ -15,12 +15,21 @@
 #define HPAD 2 /* horizontal padding */
 #define VPAD 1 /* vertical padding */
 
+#define PROGNAME "xitems"
+
 #define LEN(A) (sizeof(A)/sizeof((A)[0]))
+
+static void
+usage(void)
+{
+	printf("too bad\n");
+	exit(1);
+}
 
 static void
 errx(int eval, const char *fmt, ...)
 {
-	fputs("lockscreen: ", stderr);
+	fputs(PROGNAME ": ", stderr);
 	if (fmt) {
 		va_list argp;
 		va_start(argp, fmt);
@@ -93,26 +102,152 @@ redraw(struct item *first, int height, int width, XFontStruct *font)
 	} while (it != first);
 }
 
+char *
+sdefault(char *opt, char *def)
+{
+	char *val = XGetDefault(dpy, PROGNAME, opt);
+	return val ? val : def;
+}
+
+int
+idefault(char *opt, int def)
+{
+	char *val = XGetDefault(dpy, PROGNAME, opt);
+	return val ? atoi(val) : def;
+}
+
+char *
+sarg(int *argcp, char **argvp[])
+{
+	if (--*argcp <= 0)
+		usage();
+	++*argvp;
+	return **argvp;
+}
+
+int
+iarg(int *argcp, char **argvp[])
+{
+	if (--*argcp <= 0)
+		usage();
+	++*argvp;
+	return atoi(**argvp);
+}
+
 int
 main(int argc, char *argv[])
 {
-	(void)argc, (void)argv;
-
 	struct item *first = NULL, *last = NULL;
 	XFontStruct *font;
 	size_t linesize = 0, nitems = 0;
 	ssize_t linelen;
 	char *line = NULL;
-	int width = 0; /* XXX */
+	int width = 0;
 	int height;
 	XGCValues values;
 	XSetWindowAttributes swa = {
 		.override_redirect = True,
 		.save_under = True,
-		//.background_pixel = WhitePixel(dpy, screen),
 		.event_mask = ExposureMask | KeyPressMask | StructureNotifyMask,
 	};
-	XClassHint ch = {"xitems", "xitems"};
+	XClassHint ch = {PROGNAME, PROGNAME};
+	XColor col1, col2;
+
+	char *fontname, *bg, *fg, *sbg, *sfg;
+	int x, y, bw;
+	fontname = bg = fg = sbg = sfg = NULL;
+	x = y = bw = -1;
+
+	for (--argc, ++argv; argc > 0; --argc, ++argv)
+		if (argv[0][0] == '-')
+			switch (argv[0][1]) {
+			case 'b':
+				switch (argv[0][2]) {
+				case 'g': /* -bg */
+					bg = sarg(&argc, &argv);
+					break;
+				case 'w': /* -bw */
+					bw = iarg(&argc, &argv);
+					break;
+				default:
+					usage();
+					/* NOTREACHED */
+				}
+				break;
+
+			case 'f':
+				switch (argv[0][2]) {
+				case 'g': /* -fg */
+					fg = sarg(&argc, &argv);
+					break;
+				case 'o': /* -font */
+					fontname = sarg(&argc, &argv);
+					break;
+				default:
+					usage();
+					/* NOTREACHED */
+				}
+				break;
+
+			case 's':
+				switch (argv[0][2]) {
+				case 'b': /* -sbg */
+					sbg = sarg(&argc, &argv);
+					break;
+				case 'f': /* -sfg */
+					sfg = sarg(&argc, &argv);
+					break;
+				default:
+					usage();
+					/* NOTREACHED */
+				}
+				break;
+
+			case 'x': /* -x */
+				x = iarg(&argc, &argv);
+				break;
+
+			case 'y': /* -y */
+				y = iarg(&argc, &argv);
+				break;
+
+			default:
+				usage();
+				/* NOTREACHED */
+			}
+
+	if (!(dpy = XOpenDisplay(NULL)))
+		errx(1, "couldn't open display");
+	screen = DefaultScreen(dpy);
+
+	if (!bg)
+		bg = sdefault("background", "white");
+	if (!fg)
+		fg = sdefault("foreground", "black");
+	if (!fontname)
+		fontname = sdefault("font", "fixed");
+	if (!sbg)
+		sbg = sdefault("selectedBackground", "black");
+	if (!sfg)
+		sfg = sdefault("selectedForeground", "white");
+	if (bw == -1)
+		bw = idefault("borderWidth", 1);
+
+	if (x == -1 || y == -1) {
+		Window w;
+		int i;
+		unsigned int ui;
+		int *xp, *yp;
+
+		xp = (x == -1) ? &x : &i;
+		yp = (y == -1) ? &y : &i;
+
+		XQueryPointer(dpy, RootWindow(dpy, screen), &w, &w, xp, yp, &i,
+		    &i, &ui);
+	}
+
+	font = XLoadQueryFont(dpy, fontname);
+	height = font->ascent + font->descent + VPAD;
 
 	/* XXX take keysyms into account */
 	while ((linelen = getline(&line, &linesize, stdin)) != -1) {
@@ -129,12 +264,6 @@ main(int argc, char *argv[])
 		exit(1);
 	first = last->next;
 
-	if (!(dpy = XOpenDisplay(NULL)))
-		errx(1, "couldn't open display");
-	screen = DefaultScreen(dpy);
-	font = XLoadQueryFont(dpy, "fixed"); /* XXX */
-	height = font->ascent + font->descent + VPAD;
-
 	last = first;
 	do {
 		int w;
@@ -143,17 +272,23 @@ main(int argc, char *argv[])
 		last = last->next;
 	} while (last != first);
 
-	swa.background_pixel = WhitePixel(dpy, screen);
-	win = XCreateWindow(dpy, RootWindow(dpy, screen), 0, 0,
-	    width, nitems*height + VPAD, 1, CopyFromParent, CopyFromParent,
+	XAllocNamedColor(dpy, DefaultColormap(dpy, screen), bg, &col1, &col2);
+	swa.background_pixel = col1.pixel;
+	win = XCreateWindow(dpy, RootWindow(dpy, screen), x, y,
+	    width, nitems*height + VPAD, bw, CopyFromParent, CopyFromParent,
 	    CopyFromParent, CWOverrideRedirect | CWBackPixel | CWEventMask,
 	    &swa);
 	XSetClassHint(dpy, win, &ch);
 
-	gc_sel = XCreateGC(dpy, win, 0, &values);
-	gc_norm = XCreateGC(dpy, win, 0, &values);
-	XSetForeground(dpy, gc_sel, BlackPixel(dpy, screen));
-	XSetForeground(dpy, gc_norm, WhitePixel(dpy, screen));
+	/*
+	 * Foreground here means the colour with which to draw the background
+	 * pixmap, i.e. the actual background colour.
+	 */
+	values.foreground = col1.pixel;
+	gc_norm = XCreateGC(dpy, win, GCForeground, &values);
+	XAllocNamedColor(dpy, DefaultColormap(dpy, screen), sbg, &col1, &col2);
+	values.foreground = col1.pixel;
+	gc_sel = XCreateGC(dpy, win, GCForeground, &values);
 
 	pm_sel = XCreatePixmap(dpy, win, width, height,
 	    DefaultDepth(dpy, screen));
@@ -166,8 +301,10 @@ main(int argc, char *argv[])
 	 * Since the background pixmaps are already created, the GCs can be
 	 * reused for text.
 	 */
-	XSetForeground(dpy, gc_sel, WhitePixel(dpy, screen));
-	XSetForeground(dpy, gc_norm, BlackPixel(dpy, screen));
+	XAllocNamedColor(dpy, DefaultColormap(dpy, screen), fg, &col1, &col2);
+	XSetForeground(dpy, gc_norm, col1.pixel);
+	XAllocNamedColor(dpy, DefaultColormap(dpy, screen), sfg, &col1, &col2);
+	XSetForeground(dpy, gc_sel, col1.pixel);
 
 	if (XGrabKeyboard(dpy, RootWindow(dpy, screen), True, GrabModeAsync,
 	    GrabModeAsync, CurrentTime) != GrabSuccess)
