@@ -106,6 +106,13 @@ main(int argc, char *argv[])
 	int width = 0; /* XXX */
 	int height;
 	XGCValues values;
+	XSetWindowAttributes swa = {
+		.override_redirect = True,
+		.save_under = True,
+		//.background_pixel = WhitePixel(dpy, screen),
+		.event_mask = ExposureMask | KeyPressMask | StructureNotifyMask,
+	};
+	XClassHint ch = {"xitems", "xitems"};
 
 	/* XXX take keysyms into account */
 	while ((linelen = getline(&line, &linesize, stdin)) != -1) {
@@ -136,9 +143,12 @@ main(int argc, char *argv[])
 		last = last->next;
 	} while (last != first);
 
-	win = XCreateSimpleWindow(dpy, RootWindow(dpy, screen), 0, 0, width,
-	    nitems*height + VPAD, 1, BlackPixel(dpy, screen),
-	    WhitePixel(dpy, screen));
+	swa.background_pixel = WhitePixel(dpy, screen);
+	win = XCreateWindow(dpy, RootWindow(dpy, screen), 0, 0,
+	    width, nitems*height + VPAD, 1, CopyFromParent, CopyFromParent,
+	    CopyFromParent, CWOverrideRedirect | CWBackPixel | CWEventMask,
+	    &swa);
+	XSetClassHint(dpy, win, &ch);
 
 	gc_sel = XCreateGC(dpy, win, 0, &values);
 	gc_norm = XCreateGC(dpy, win, 0, &values);
@@ -159,9 +169,11 @@ main(int argc, char *argv[])
 	XSetForeground(dpy, gc_sel, WhitePixel(dpy, screen));
 	XSetForeground(dpy, gc_norm, BlackPixel(dpy, screen));
 
+	if (XGrabKeyboard(dpy, RootWindow(dpy, screen), True, GrabModeAsync,
+	    GrabModeAsync, CurrentTime) != GrabSuccess)
+		errx(1, "cannot grab keyboard");
+
 	XMapRaised(dpy, win);
-	XSelectInput(dpy, win, ExposureMask | KeyPressMask |
-	    StructureNotifyMask);
 
 	for (;;) {
 		XKeyEvent ke;
