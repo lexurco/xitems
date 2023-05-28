@@ -1,33 +1,36 @@
+#include <ctype.h>
+#include <errno.h>
 #include <stdarg.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <errno.h>
-#include <ctype.h>
+#include <time.h>
 #include <unistd.h>
-#include <stdbool.h>
 
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/Xos.h>
 #include <X11/Xatom.h>
 
-#define HPAD 2 /* horizontal padding */
-#define VPAD 1 /* vertical padding */
-
 #define PROGNAME "xitems"
 
 #define LEN(A) (sizeof(A)/sizeof((A)[0]))
 
+/* usage -- print usage information and die. */
 static void
 usage(void)
 {
-	printf("too bad\n");
+	printf(
+"usage: " PROGNAME " [-font font] [-bg colour] [-fg colour]\n"
+"    [-sbg colour] [-sfg colour] [-bw width]\n"
+"    [-hp padding] [-vp padding] [-x x] [-y y]\n");
 	exit(1);
 }
 
+/* die -- print formatted string, and exit with the status eval. */
 static void
-errx(int eval, const char *fmt, ...)
+die(int eval, const char *fmt, ...)
 {
 	fputs(PROGNAME ": ", stderr);
 	if (fmt) {
@@ -47,16 +50,229 @@ struct item {
 	KeySym *ks; /* NoSym-terminated array of keysyms */
 	struct item *prev;
 	struct item *next;
+	bool dirty; /* should be redrawn */
 };
 
-static Window win;
-static Pixmap pm_sel, pm_norm;
-static GC gc_sel, gc_norm;
-static Display *dpy;
+static struct item *first = NULL; /* first member of the list */
 static struct item *selected = NULL;
-static int screen;
 
-struct item *
+/* command-line options and X resources */
+static char *o_font = NULL;
+static char *o_bg = NULL, *o_fg = NULL, *o_sbg = NULL, *o_sfg = NULL;
+static int o_x = -1, o_y = -1;
+static int o_bw = -1;
+static int o_hp = -1, o_vp = -1;
+
+/* X globals */
+static Display *dpy = NULL;
+static int screen;
+static Window win;
+static GC gc_sel, gc_norm;
+static Pixmap pm_sel, pm_norm; /* background pixmaps */
+static XFontStruct *font;
+static int height, width; /* height and width of one item */
+
+/* redraw -- redraw the entire window */
+static void
+redraw(void)
+{
+	struct item *it = first;
+	int y = 0;
+
+	do {
+		if (it->dirty) {
+			GC gc;
+			Pixmap pm;
+
+			if (it == selected) {
+				gc = gc_sel;
+				pm = pm_sel;
+			} else {
+				gc = gc_norm;
+				pm = pm_norm;
+			}
+
+			XCopyArea(dpy, pm, win, gc, 0, 0, width, height, 0, y);
+			XDrawString(dpy, win, gc, o_hp, y + o_vp+font->ascent,
+			    it->s, it->len);
+
+			it->dirty = false;
+		}
+
+		y += height;
+		it = it->next;
+	} while (it != first);
+}
+
+/* proc -- body of the main event-reading loop. */
+static void
+proc(void)
+{
+	XKeyEvent ke;
+	KeySym ks;
+	char *dummy = "";
+	XEvent ev;
+
+	XNextEvent(dpy, &ev);
+
+	/* XXX try to avoid full redraws */
+	switch (ev.type) {
+	case Expose:
+		redraw();
+		break;
+
+	case KeyPress:
+		ke = ev.xkey;
+		XLookupString(&ke, dummy, 0, &ks, NULL);
+
+		if (ke.state & ControlMask) {
+			switch (ks) {
+			case XK_bracketleft:
+			case XK_C:
+			case XK_c:
+				ks = XK_Escape;
+				break;
+			case XK_M:
+			case XK_m:
+			case XK_J:
+			case XK_j:
+				ks = XK_Return;
+				break;
+			case XK_N:
+			case XK_n:
+				ks = XK_j;
+				return;
+			case XK_P:
+			case XK_p:
+				ks = XK_k;
+				return;
+			}
+		}
+
+		switch (ks) {
+		case XK_j:
+		case XK_J:
+		case XK_Down:
+			selected->dirty = true;
+			selected = selected ? selected->next : first;
+			selected->dirty = true;
+			redraw();
+			break;
+		case XK_k:
+		case XK_K:
+		case XK_Up:
+			selected->dirty = true;
+			selected = selected ? selected->prev : first->prev;
+			selected->dirty = true;
+			redraw();
+			break;
+		case XK_Return:
+			if (selected)
+				puts(selected->s);
+			exit(0);
+			/* NOTREACHED */
+		case XK_Escape:
+			exit(0);
+			/* NOTREACHED */
+		}
+
+		break;
+	}
+}
+
+/* grabkb -- try to grab keyboard for a second */
+static void
+grabkb(void)
+{
+	struct timespec ts = { .tv_sec = 0, .tv_nsec = 1000000 };
+	int i;
+
+	for (i = 0; i < 1000; ++i) {
+		if (XGrabKeyboard(dpy, RootWindow(dpy, screen), True,
+		    GrabModeAsync, GrabModeAsync, CurrentTime) == GrabSuccess)
+			return;
+		nanosleep(&ts, NULL);
+	}
+	die(1, "couldn't grab keyboard");
+}
+
+/*
+ * setupx -- create and map a window for n items; assign values to the X
+ * globals.
+ */
+static void
+setupx(int n)
+{
+	struct item *it;
+	XGCValues gcv;
+	XColor col, dummy;
+	XClassHint ch = {PROGNAME, PROGNAME};
+	XSetWindowAttributes swa = {
+		.override_redirect = True,
+		.save_under = True,
+		.event_mask = ExposureMask | KeyPressMask | StructureNotifyMask,
+	};
+
+	if (!(font = XLoadQueryFont(dpy, o_font)))
+		die(1, "couldn't load font");
+	height = font->ascent + font->descent + o_vp;
+
+	it = first;
+	do {
+		int w;
+		if ((w = XTextWidth(font, it->s, it->len) + o_hp*2) > width)
+			width = w;
+		it = it->next;
+	} while (it != first);
+
+	XAllocNamedColor(dpy, DefaultColormap(dpy, screen), o_bg, &col, &dummy);
+	swa.background_pixel = col.pixel;
+	win = XCreateWindow(dpy, RootWindow(dpy, screen), o_x, o_y,
+	    width, n*height, o_bw, CopyFromParent, CopyFromParent,
+	    CopyFromParent, CWOverrideRedirect | CWBackPixel | CWEventMask |
+		CWSaveUnder, &swa);
+	XSetClassHint(dpy, win, &ch);
+
+	/*
+	 * Foreground here means the colour with which to draw the background
+	 * pixmap, i.e. the actual background colour.
+	 */
+	gcv.foreground = col.pixel;
+	gc_norm = XCreateGC(dpy, win, GCForeground, &gcv);
+	XAllocNamedColor(dpy, DefaultColormap(dpy, screen), o_sbg, &col,
+	    &dummy);
+	gcv.foreground = col.pixel;
+	gc_sel = XCreateGC(dpy, win, GCForeground, &gcv);
+
+	pm_sel = XCreatePixmap(dpy, win, width, height,
+	    DefaultDepth(dpy, screen));
+	pm_norm = XCreatePixmap(dpy, win, width, height,
+	    DefaultDepth(dpy, screen));
+	XFillRectangle(dpy, pm_sel, gc_sel, 0, 0, width, height);
+	XFillRectangle(dpy, pm_norm, gc_norm, 0, 0, width, height);
+
+	/*
+	 * Since the background pixmaps are already created, the GCs can be
+	 * reused for text.
+	 */
+	XAllocNamedColor(dpy, DefaultColormap(dpy, screen), o_fg, &col,
+	    &dummy);
+	XSetForeground(dpy, gc_norm, col.pixel);
+	XAllocNamedColor(dpy, DefaultColormap(dpy, screen), o_sfg, &col,
+	    &dummy);
+	XSetForeground(dpy, gc_sel, col.pixel);
+
+	grabkb();
+
+	XMapRaised(dpy, win);
+}
+
+/*
+ * Create a new struct item, and insert it a after the it item. The rest of the
+ * arguments are values that the new item receives. On success return pointer
+ * to the new item. Return NULL otherwise.
+ */
+static struct item *
 insitem(struct item *it, char *s, size_t len) {
 	struct item *new;
 	if (!(new = calloc(1, sizeof *new)))
@@ -71,92 +287,94 @@ insitem(struct item *it, char *s, size_t len) {
 	new->s = strdup(s);
 	new->len = len;
 	new->ks = NULL; /* TODO */
+	new->dirty = true;
 	return new;
 }
 
-void
-redraw(struct item *first, int height, int width, XFontStruct *font)
+/*
+ * mkitems -- create a list of items from stdin, and return pointer to the
+ * new list's first element. If np is not NULL, set its value to the number of
+ * elements in the list. Return NULL on error.
+ */
+static struct item *
+mkitems(int *np)
 {
-	struct item *it = first;
-	int y_text = VPAD + font->ascent;
-	int y_pm = 0;
+	struct item *last = NULL;
+	size_t n = 0;
+	char *line = NULL;
+	size_t linesize = 0;
+	ssize_t linelen;
 
-	do {
-		GC gc;
-		Pixmap pm;
+	/* XXX take keysyms into account */
+	while ((linelen = getline(&line, &linesize, stdin)) != -1) {
+		struct item *it;
+		line[--linelen] = '\0'; /* get rid of '\n' */
+		if (!(it = insitem(last, line, linelen)))
+			die(1, "couldn't insert new item");
+		n++;
+		last = it;
+	}
+	free(line);
 
-		if (it == selected) {
-			gc = gc_sel;
-			pm = pm_sel;
-		} else {
-			gc = gc_norm;
-			pm = pm_norm;
-		}
+	if (np)
+		*np = n;
 
-		XCopyArea(dpy, pm, win, gc, 0, 0, width, height, 0, y_pm);
-		XDrawString(dpy, win, gc, HPAD, y_text, it->s, it->len);
-
-		y_text += height;
-		y_pm += height;
-		it = it->next;
-	} while (it != first);
+	return last ? last->next : NULL;
 }
 
-char *
+/*
+ * {s,i}default -- return the {char *,int} value of the X default, or def
+ * otherwise.
+ */
+static char *
 sdefault(char *opt, char *def)
 {
 	char *val = XGetDefault(dpy, PROGNAME, opt);
 	return val ? val : def;
 }
 
-int
+static int
 idefault(char *opt, int def)
 {
 	char *val = XGetDefault(dpy, PROGNAME, opt);
 	return val ? atoi(val) : def;
 }
 
-char *
-sarg(int *argcp, char **argvp[])
+/* nextarg -- safely skip the current command-line option */
+static void
+nextarg(int *argcp, char **argvp[])
 {
 	if (--*argcp <= 0)
 		usage();
 	++*argvp;
+}
+
+/*
+ * {s,i}arg -- return the {char *,int} argument of the current command-line
+ * option.
+ */
+static char *
+sarg(int *argcp, char **argvp[])
+{
+	nextarg(argcp, argvp);
 	return **argvp;
 }
 
-int
+static int
 iarg(int *argcp, char **argvp[])
 {
-	if (--*argcp <= 0)
-		usage();
-	++*argvp;
+	nextarg(argcp, argvp);
 	return atoi(**argvp);
 }
 
+/*
+ * xitems -- pop-up menu for X, constructed from stdin, and printing user choice
+ * to stdout.
+ */
 int
 main(int argc, char *argv[])
 {
-	struct item *first = NULL, *last = NULL;
-	XFontStruct *font;
-	size_t linesize = 0, nitems = 0;
-	ssize_t linelen;
-	char *line = NULL;
-	int width = 0;
-	int height;
-	XGCValues values;
-	XSetWindowAttributes swa = {
-		.override_redirect = True,
-		.save_under = True,
-		.event_mask = ExposureMask | KeyPressMask | StructureNotifyMask,
-	};
-	XClassHint ch = {PROGNAME, PROGNAME};
-	XColor col1, col2;
-
-	char *fontname, *bg, *fg, *sbg, *sfg;
-	int x, y, bw;
-	fontname = bg = fg = sbg = sfg = NULL;
-	x = y = bw = -1;
+	int n = 0;
 
 	for (--argc, ++argv; argc > 0; --argc, ++argv)
 		if (argv[0][0] == '-')
@@ -164,194 +382,102 @@ main(int argc, char *argv[])
 			case 'b':
 				switch (argv[0][2]) {
 				case 'g': /* -bg */
-					bg = sarg(&argc, &argv);
+					o_bg = sarg(&argc, &argv);
 					break;
 				case 'w': /* -bw */
-					bw = iarg(&argc, &argv);
+					o_bw = iarg(&argc, &argv);
 					break;
 				default:
 					usage();
 					/* NOTREACHED */
 				}
 				break;
-
 			case 'f':
 				switch (argv[0][2]) {
 				case 'g': /* -fg */
-					fg = sarg(&argc, &argv);
+					o_fg = sarg(&argc, &argv);
 					break;
 				case 'o': /* -font */
-					fontname = sarg(&argc, &argv);
+					o_font = sarg(&argc, &argv);
 					break;
 				default:
 					usage();
 					/* NOTREACHED */
 				}
 				break;
-
+			case 'h': /* -hp */
+				o_hp = iarg(&argc, &argv);
+				break;
 			case 's':
 				switch (argv[0][2]) {
 				case 'b': /* -sbg */
-					sbg = sarg(&argc, &argv);
+					o_sbg = sarg(&argc, &argv);
 					break;
 				case 'f': /* -sfg */
-					sfg = sarg(&argc, &argv);
+					o_sfg = sarg(&argc, &argv);
 					break;
 				default:
 					usage();
 					/* NOTREACHED */
 				}
 				break;
-
+			case 'v': /* -vp */
+				o_vp = iarg(&argc, &argv);
+				break;
 			case 'x': /* -x */
-				x = iarg(&argc, &argv);
+				o_x = iarg(&argc, &argv);
 				break;
-
 			case 'y': /* -y */
-				y = iarg(&argc, &argv);
+				o_y = iarg(&argc, &argv);
 				break;
-
 			default:
 				usage();
 				/* NOTREACHED */
 			}
 
 	if (!(dpy = XOpenDisplay(NULL)))
-		errx(1, "couldn't open display");
+		die(1, "couldn't open display");
 	screen = DefaultScreen(dpy);
 
-	if (!bg)
-		bg = sdefault("background", "white");
-	if (!fg)
-		fg = sdefault("foreground", "black");
-	if (!fontname)
-		fontname = sdefault("font", "fixed");
-	if (!sbg)
-		sbg = sdefault("selectedBackground", "black");
-	if (!sfg)
-		sfg = sdefault("selectedForeground", "white");
-	if (bw == -1)
-		bw = idefault("borderWidth", 1);
+	if (!o_bg)
+		o_bg = sdefault("background", "white");
+	if (!o_fg)
+		o_fg = sdefault("foreground", "black");
+	if (!o_font)
+		o_font = sdefault("font", "fixed");
+	if (!o_sbg)
+		o_sbg = sdefault("selectedBackground", "black");
+	if (!o_sfg)
+		o_sfg = sdefault("selectedForeground", "white");
+	if (o_bw == -1)
+		o_bw = idefault("borderWidth", 1);
+	if (o_hp == -1)
+		o_hp = idefault("horizontalPadding", 2);
+	if (o_vp == -1)
+		o_vp = idefault("verticalPadding", 1);
 
-	if (x == -1 || y == -1) {
+	if (o_x == -1 || o_y == -1) {
 		Window w;
 		int i;
 		unsigned int ui;
 		int *xp, *yp;
 
-		xp = (x == -1) ? &x : &i;
-		yp = (y == -1) ? &y : &i;
+		xp = (o_x == -1) ? &o_x : &i;
+		yp = (o_y == -1) ? &o_y : &i;
 
 		XQueryPointer(dpy, RootWindow(dpy, screen), &w, &w, xp, yp, &i,
 		    &i, &ui);
 	}
 
-	font = XLoadQueryFont(dpy, fontname);
-	height = font->ascent + font->descent + VPAD;
-
-	/* XXX take keysyms into account */
-	while ((linelen = getline(&line, &linesize, stdin)) != -1) {
-		struct item *it;
-		line[--linelen] = '\0'; /* get rid of '\n' */
-		if (!(it = insitem(last, line, linelen)))
-			exit(1);
-		nitems++;
-		last = it;
+	if (!(first = selected = mkitems(&n))) {
+		if (n)
+			die(1, "coulnd't create items list");
+		else
+			exit(0);
 	}
-	free(line);
+	setupx(n);
 
-	if (!last)
-		exit(1);
-	first = last->next;
-
-	last = first;
-	do {
-		int w;
-		if ((w = XTextWidth(font, last->s, last->len) + HPAD*2) > width)
-			width = w;
-		last = last->next;
-	} while (last != first);
-
-	XAllocNamedColor(dpy, DefaultColormap(dpy, screen), bg, &col1, &col2);
-	swa.background_pixel = col1.pixel;
-	win = XCreateWindow(dpy, RootWindow(dpy, screen), x, y,
-	    width, nitems*height + VPAD, bw, CopyFromParent, CopyFromParent,
-	    CopyFromParent, CWOverrideRedirect | CWBackPixel | CWEventMask,
-	    &swa);
-	XSetClassHint(dpy, win, &ch);
-
-	/*
-	 * Foreground here means the colour with which to draw the background
-	 * pixmap, i.e. the actual background colour.
-	 */
-	values.foreground = col1.pixel;
-	gc_norm = XCreateGC(dpy, win, GCForeground, &values);
-	XAllocNamedColor(dpy, DefaultColormap(dpy, screen), sbg, &col1, &col2);
-	values.foreground = col1.pixel;
-	gc_sel = XCreateGC(dpy, win, GCForeground, &values);
-
-	pm_sel = XCreatePixmap(dpy, win, width, height,
-	    DefaultDepth(dpy, screen));
-	pm_norm = XCreatePixmap(dpy, win, width, height,
-	    DefaultDepth(dpy, screen));
-	XFillRectangle(dpy, pm_sel, gc_sel, 0, 0, width, height);
-	XFillRectangle(dpy, pm_norm, gc_norm, 0, 0, width, height);
-
-	/*
-	 * Since the background pixmaps are already created, the GCs can be
-	 * reused for text.
-	 */
-	XAllocNamedColor(dpy, DefaultColormap(dpy, screen), fg, &col1, &col2);
-	XSetForeground(dpy, gc_norm, col1.pixel);
-	XAllocNamedColor(dpy, DefaultColormap(dpy, screen), sfg, &col1, &col2);
-	XSetForeground(dpy, gc_sel, col1.pixel);
-
-	if (XGrabKeyboard(dpy, RootWindow(dpy, screen), True, GrabModeAsync,
-	    GrabModeAsync, CurrentTime) != GrabSuccess)
-		errx(1, "cannot grab keyboard");
-
-	XMapRaised(dpy, win);
-
-	for (;;) {
-		XKeyEvent ke;
-		KeySym ks;
-		char *dummy = "";
-		XEvent ev;
-
-		XNextEvent(dpy, &ev);
-
-		/* XXX try to avoid full redraws */
-		switch (ev.type) {
-		case Expose:
-			redraw(first, height, width, font);
-			break;
-		case KeyPress:
-			ke = ev.xkey;
-			XLookupString(&ke, dummy, 0, &ks, NULL);
-
-			switch (ks) {
-			case XK_q:
-			case XK_Q:
-				exit(0);
-				/* NOTREACHED */
-			case XK_j:
-			case XK_J:
-				selected = selected ? selected->next : first;
-				redraw(first, height, width, font);
-				break;
-			case XK_k:
-			case XK_K:
-				selected = selected ? selected->prev : first->prev;
-				redraw(first, height, width, font);
-				break;
-			case XK_Return:
-				if (selected)
-					puts(selected->s);
-				exit(0);
-				/* NOTREACHED */
-			}
-			break;
-		}
-	}
+	for (;;)
+		proc();
 	/* NOTREACHED */
 }
