@@ -167,7 +167,6 @@ proc(void)
 
 	XNextEvent(dpy, &ev);
 
-	/* XXX try to avoid full redraws */
 	switch (ev.type) {
 	case EnterNotify:
 		inwin = true;
