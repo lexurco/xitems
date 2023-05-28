@@ -14,6 +14,7 @@
 #include <X11/Xatom.h>
 
 #define PROGNAME "xitems"
+#define MAXKS 32
 
 #define LEN(A) (sizeof(A)/sizeof((A)[0]))
 
@@ -43,6 +44,20 @@ die(int eval, const char *fmt, ...)
 	exit(eval);
 }
 
+/* warn -- print formatted string to stderr. */
+static void
+warn(const char *fmt, ...)
+{
+	fputs(PROGNAME ": ", stderr);
+	if (fmt) {
+		va_list argp;
+		va_start(argp, fmt);
+		vfprintf(stderr, fmt, argp);
+		va_end(argp);
+	}
+	fputc('\n', stderr);
+}
+
 enum direction {
 	DIR_UP,
 	DIR_DOWN
@@ -50,11 +65,12 @@ enum direction {
 
 /* doubly-linked cyclic list */
 struct item {
-	size_t len; /* length of string */
-	char *s;
-	KeySym *ks; /* NoSym-terminated array of keysyms */
 	struct item *prev;
 	struct item *next;
+	char *s;
+	KeySym ks[MAXKS]; /* array of associated keysyms */
+	size_t len; /* length of string */
+	size_t nks; /* number of associated keysyms */
 	bool dirty; /* should be redrawn */
 };
 
@@ -77,9 +93,9 @@ static Pixmap pm_sel, pm_norm; /* background pixmaps */
 static XFontStruct *font;
 static int height, width; /* height and width of one item */
 
-/* newsel -- mark the item at position y (from top) as selected. */
+/* selpos -- mark the item at position y (from top) as selected. */
 static void
-newsel(int y)
+selpos(int y)
 {
 	struct item *unselected = selected;
 	int top = 1;
@@ -89,12 +105,12 @@ newsel(int y)
 	if (y <= 0)
 		goto end;
 
-	do {
+	for (selected = first; selected != first->prev;
+	    selected = selected->next) {
 		if (y >= top && y < top+height)
 			break;
 		top += height;
-		selected = selected->next;
-	} while (selected != first->prev);
+	}
 
 end:
 	if (unselected != selected)
@@ -154,6 +170,33 @@ scroll(enum direction dir)
 	selected->dirty = true;
 }
 
+/*
+ * keyselectd -- compare ks with keysyms stored in the items list, and mark
+ * the first match as selected. Return true on match, and false otherwise.
+ */
+static bool
+keyselect(KeySym ks)
+{
+	struct item *it = first;
+	KeySym k, dummy;
+
+	XConvertCase(ks, &k, &dummy);
+
+	do {
+		size_t i;
+		for (i = 0; i < it->nks; ++i)
+			if (it->ks[i] == k) {
+				selected->dirty = true;
+				selected = it;
+				selected->dirty = true;
+				return true;
+			}
+		it = it->next;
+	} while (it != first);
+
+	return false;
+}
+
 /* proc -- body of the main event-reading loop. */
 static void
 proc(void)
@@ -172,7 +215,7 @@ proc(void)
 		inwin = true;
 		/* FALLTHRU */
 	case MotionNotify:
-		newsel(ev.xbutton.y);
+		selpos(ev.xbutton.y);
 		/* FALLTHRU */
 	case Expose:
 		redraw();
@@ -218,7 +261,8 @@ proc(void)
 				ks = XK_k;
 				return;
 			}
-		}
+		} else if (keyselect(ks))
+			succeed(true);
 
 		switch (ks) {
 		case XK_j:
@@ -378,8 +422,10 @@ setupx(int n)
  * to the new item. Return NULL otherwise.
  */
 static struct item *
-insitem(struct item *it, char *s, size_t len) {
+insitem(struct item *it, char *s) {
 	struct item *new;
+	char *p, *end;
+
 	if (!(new = calloc(1, sizeof *new)))
 		return NULL;
 	if (it) {
@@ -389,10 +435,41 @@ insitem(struct item *it, char *s, size_t len) {
 		it->next = new;
 	} else
 		new->prev = new->next = new;
-	new->s = strdup(s);
-	new->len = len;
-	new->ks = NULL; /* TODO */
+	new->nks = 0;
 	new->dirty = true;
+
+	for (p = s; ; p = end) {
+		size_t n;
+		char c;
+		KeySym ks;
+
+		n = strspn(p, " ");
+		p = p + n;
+		if (!(n = strcspn(p, " \t"))) {
+			p += strspn(p, "  \t");
+			break;
+		}
+
+		end = p + n;
+		c = *end;
+		*end = '\0';
+
+		if ((ks = XStringToKeysym(p)) == NoSymbol)
+			warn("no such keysym: %s\n", p);
+		else if (new->nks >= MAXKS)
+			warn("too many keysyms (%s)\n", p);
+		else {
+			KeySym k, dummy;
+			XConvertCase(ks, &k, &dummy);
+			new->ks[new->nks++] = k;
+		}
+
+		*end = c;
+	}
+
+	new->len = strlen(p);
+	new->s = strdup(p);
+
 	return new;
 }
 
@@ -410,11 +487,10 @@ mkitems(int *np)
 	size_t linesize = 0;
 	ssize_t linelen;
 
-	/* XXX take keysyms into account */
 	while ((linelen = getline(&line, &linesize, stdin)) != -1) {
 		struct item *it;
 		line[--linelen] = '\0'; /* get rid of '\n' */
-		if (!(it = insitem(last, line, linelen)))
+		if (!(it = insitem(last, line)))
 			die(1, "couldn't insert new item");
 		n++;
 		last = it;
