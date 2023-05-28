@@ -22,7 +22,7 @@ usage(void)
 {
 	printf(
 "usage: " PROGNAME " [-font font] [-bg colour] [-fg colour]\n"
-"    [-sbg colour] [-sfg colour] [-bw width]\n"
+"    [-sbg colour] [-sfg colour] [-bc colour] [-bw width]\n"
 "    [-hp padding] [-vp padding] [-x x] [-y y]\n");
 	exit(1);
 }
@@ -77,7 +77,8 @@ static struct item *selected = NULL;
 
 /* command-line options and X resources */
 static char *o_font = NULL;
-static char *o_bg = NULL, *o_fg = NULL, *o_sbg = NULL, *o_sfg = NULL;
+static char *o_bg = NULL, *o_fg = NULL, *o_sbg = NULL, *o_sfg = NULL,
+    *o_bc = NULL;
 static int o_x = -1, o_y = -1;
 static int o_bw = -1;
 static int o_hp = -1, o_vp = -1;
@@ -374,12 +375,15 @@ setupx(int n)
 	if (o_y + height*n > DisplayHeight(dpy, screen))
 		o_y = DisplayHeight(dpy, screen) - height*n;
 
+	XAllocNamedColor(dpy, DefaultColormap(dpy, screen), o_bc, &col, &dummy);
+	swa.border_pixel = col.pixel;
 	XAllocNamedColor(dpy, DefaultColormap(dpy, screen), o_bg, &col, &dummy);
 	swa.background_pixel = col.pixel;
+
 	win = XCreateWindow(dpy, RootWindow(dpy, screen), o_x, o_y,
 	    width, n*height, o_bw, CopyFromParent, CopyFromParent,
-	    CopyFromParent, CWOverrideRedirect | CWBackPixel | CWEventMask |
-		CWSaveUnder, &swa);
+	    CopyFromParent, CWOverrideRedirect | CWBackPixel | CWBorderPixel |
+		CWEventMask | CWSaveUnder, &swa);
 	XSetClassHint(dpy, win, &ch);
 
 	/*
@@ -512,14 +516,14 @@ mkitems(int *np)
  * otherwise.
  */
 static char *
-sdefault(char *opt, char *def)
+sdefault(const char *opt, const char *def)
 {
 	char *val = XGetDefault(dpy, PROGNAME, opt);
-	return val ? val : def;
+	return val ? val : (char *)def;
 }
 
 static int
-idefault(char *opt, int def)
+idefault(const char *opt, int def)
 {
 	char *val = XGetDefault(dpy, PROGNAME, opt);
 	return val ? atoi(val) : def;
@@ -566,6 +570,9 @@ main(int argc, char *argv[])
 			switch (argv[0][1]) {
 			case 'b':
 				switch (argv[0][2]) {
+				case 'c': /* -bc */
+					o_bc = sarg(&argc, &argv);
+					break;
 				case 'g': /* -bg */
 					o_bg = sarg(&argc, &argv);
 					break;
@@ -634,6 +641,8 @@ main(int argc, char *argv[])
 		o_sbg = sdefault("selectedBackground", "black");
 	if (!o_sfg)
 		o_sfg = sdefault("selectedForeground", "white");
+	if (!o_bc)
+		o_bc = sdefault("borderColour", "black");
 	if (o_bw == -1)
 		o_bw = idefault("borderWidth", 1);
 	if (o_hp == -1)
