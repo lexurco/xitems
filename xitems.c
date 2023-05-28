@@ -16,8 +16,6 @@
 #define PROGNAME "xitems"
 #define MAXKS 32
 
-#define LEN(A) (sizeof(A)/sizeof((A)[0]))
-
 /* usage -- print usage information and die. */
 static void
 usage(void)
@@ -371,6 +369,11 @@ setupx(int n)
 		it = it->next;
 	} while (it != first);
 
+	if (o_x + width > DisplayWidth(dpy, screen))
+		o_x = DisplayWidth(dpy, screen) - width;
+	if (o_y + height*n > DisplayHeight(dpy, screen))
+		o_y = DisplayHeight(dpy, screen) - height*n;
+
 	XAllocNamedColor(dpy, DefaultColormap(dpy, screen), o_bg, &col, &dummy);
 	swa.background_pixel = col.pixel;
 	win = XCreateWindow(dpy, RootWindow(dpy, screen), o_x, o_y,
@@ -489,7 +492,8 @@ mkitems(int *np)
 
 	while ((linelen = getline(&line, &linesize, stdin)) != -1) {
 		struct item *it;
-		line[--linelen] = '\0'; /* get rid of '\n' */
+		if (line[linelen-1] == '\n')
+			line[--linelen] = '\0';
 		if (!(it = insitem(last, line)))
 			die(1, "couldn't insert new item");
 		n++;
