@@ -43,6 +43,11 @@ die(int eval, const char *fmt, ...)
 	exit(eval);
 }
 
+enum direction {
+	DIR_UP,
+	DIR_DOWN
+};
+
 /* doubly-linked cyclic list */
 struct item {
 	size_t len; /* length of string */
@@ -71,6 +76,30 @@ static GC gc_sel, gc_norm;
 static Pixmap pm_sel, pm_norm; /* background pixmaps */
 static XFontStruct *font;
 static int height, width; /* height and width of one item */
+
+/* newsel -- mark the item at position y (from top) as selected. */
+static void
+newsel(int y)
+{
+	struct item *unselected = selected;
+	int top = 1;
+
+	selected = first;
+
+	if (y <= 0)
+		goto end;
+
+	do {
+		if (y >= top && y < top+height)
+			break;
+		top += height;
+		selected = selected->next;
+	} while (selected != first->prev);
+
+end:
+	if (unselected != selected)
+		unselected->dirty = selected->dirty = true;
+}
 
 /* redraw -- redraw the entire window */
 static void
@@ -104,6 +133,27 @@ redraw(void)
 	} while (it != first);
 }
 
+/* succeed -- exit successfully. If print is true, also print selected item. */
+static void
+succeed(bool print)
+{
+	if (print && selected)
+		puts(selected->s);
+	exit(0);
+}
+
+/* scroll -- select the previous, or next item, depending on dir. */
+static void
+scroll(enum direction dir)
+{
+	if (selected) {
+		selected->dirty = true;
+		selected = (dir == DIR_UP) ? selected->prev : selected->next;
+	} else
+		selected = (dir == DIR_UP) ? first->prev : first;
+	selected->dirty = true;
+}
+
 /* proc -- body of the main event-reading loop. */
 static void
 proc(void)
@@ -113,14 +163,36 @@ proc(void)
 	char *dummy = "";
 	XEvent ev;
 
+	static bool inwin = false;
+
 	XNextEvent(dpy, &ev);
 
 	/* XXX try to avoid full redraws */
 	switch (ev.type) {
+	case EnterNotify:
+		inwin = true;
+		/* FALLTHRU */
+	case MotionNotify:
+		newsel(ev.xbutton.y);
+		/* FALLTHRU */
 	case Expose:
 		redraw();
 		break;
-
+	case LeaveNotify:
+		inwin = false;
+		break;
+	case ButtonPress:
+		if (ev.xbutton.button == Button4) {
+			scroll(DIR_UP);
+			redraw();
+		} else if (ev.xbutton.button == Button5) {
+			scroll(DIR_DOWN);
+			redraw();
+		} else if (inwin)
+			succeed(true);
+		else
+			succeed(false);
+		break;
 	case KeyPress:
 		ke = ev.xkey;
 		XLookupString(&ke, dummy, 0, &ks, NULL);
@@ -153,31 +225,42 @@ proc(void)
 		case XK_j:
 		case XK_J:
 		case XK_Down:
-			selected->dirty = true;
-			selected = selected ? selected->next : first;
-			selected->dirty = true;
+			scroll(DIR_DOWN);
 			redraw();
 			break;
 		case XK_k:
 		case XK_K:
 		case XK_Up:
-			selected->dirty = true;
-			selected = selected ? selected->prev : first->prev;
-			selected->dirty = true;
+			scroll(DIR_UP);
 			redraw();
 			break;
 		case XK_Return:
-			if (selected)
-				puts(selected->s);
-			exit(0);
+			succeed(true);
 			/* NOTREACHED */
 		case XK_Escape:
-			exit(0);
+			succeed(false);
 			/* NOTREACHED */
 		}
 
 		break;
 	}
+}
+
+/* grabptr -- try to grab pointer for a second */
+static void
+grabptr(void)
+{
+	struct timespec ts = { .tv_sec = 0, .tv_nsec = 1000000 };
+	int i;
+
+	for (i = 0; i < 1000; ++i) {
+		if (XGrabPointer(dpy, RootWindow(dpy, screen), True,
+		    ButtonPressMask, GrabModeAsync, GrabModeAsync, None, None,
+		    CurrentTime) == GrabSuccess)
+			return;
+		nanosleep(&ts, NULL);
+	}
+	die(1, "couldn't grab pointer");
 }
 
 /* grabkb -- try to grab keyboard for a second */
@@ -191,6 +274,24 @@ grabkb(void)
 		if (XGrabKeyboard(dpy, RootWindow(dpy, screen), True,
 		    GrabModeAsync, GrabModeAsync, CurrentTime) == GrabSuccess)
 			return;
+		nanosleep(&ts, NULL);
+	}
+	die(1, "couldn't grab keyboard");
+}
+
+/* setfocus -- try setting focus to the menu for a second */
+static void
+setfocus(void)
+{
+	struct timespec ts = { .tv_sec = 0, .tv_nsec = 1000000 };
+	Window focuswin;
+	int i, dummy;
+
+	for (i = 0; i < 1000; ++i) {
+		XGetInputFocus(dpy, &focuswin, &dummy);
+		if (focuswin == win)
+			return;
+		XSetInputFocus(dpy, win, RevertToParent, CurrentTime);
 		nanosleep(&ts, NULL);
 	}
 	die(1, "couldn't grab keyboard");
@@ -210,7 +311,9 @@ setupx(int n)
 	XSetWindowAttributes swa = {
 		.override_redirect = True,
 		.save_under = True,
-		.event_mask = ExposureMask | KeyPressMask | StructureNotifyMask,
+		.event_mask = ExposureMask | StructureNotifyMask |
+		    KeyPressMask | ButtonPressMask | ButtonReleaseMask |
+		    PointerMotionMask | LeaveWindowMask | EnterWindowMask,
 	};
 
 	if (!(font = XLoadQueryFont(dpy, o_font)))
@@ -263,8 +366,11 @@ setupx(int n)
 	XSetForeground(dpy, gc_sel, col.pixel);
 
 	grabkb();
+	grabptr();
 
 	XMapRaised(dpy, win);
+
+	setfocus();
 }
 
 /*
