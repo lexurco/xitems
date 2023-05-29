@@ -85,12 +85,19 @@ static int o_bw = -1;
 static int o_hp = -1, o_vp = -1;
 
 /* X globals */
+enum {
+	PIXEL_BG = 0,
+	PIXEL_BC,
+};
+#define PIXEL_N 2
+
 static Display *dpy = NULL;
 static int screen;
 static Window win;
 static int height, width; /* height and width of one item */
 static XftFont *font;
 static XftColor c_fg, c_sfg, c_sbg;
+static unsigned long pixels[PIXEL_N];
 
 /* selpos -- mark the item at position y (from top) as selected. */
 static void
@@ -116,7 +123,7 @@ end:
 		unselected->dirty = selected->dirty = true;
 }
 
-/* redraw -- redraw the entire window */
+/* redraw -- redraw the entire window. */
 static void
 redraw(void)
 {
@@ -131,17 +138,17 @@ redraw(void)
 
 	do {
 		if (it->dirty) {
-			XftColor *xftc;
+			XftColor *c;
 
 			XClearArea(dpy, win, 0, y, width, height, False);
 
 			if (it == selected) {
-				xftc = &c_sfg;
+				c = &c_sfg;
 				XftDrawRect(d, &c_sbg, 0, y, width, height);
 			} else
-				xftc = &c_fg;
+				c = &c_fg;
 
-			XftDrawStringUtf8(d, xftc, font,
+			XftDrawStringUtf8(d, c, font,
 			    o_hp, y + o_vp+font->ascent,
 			    (FcChar8 *)it->s, it->len);
 
@@ -153,12 +160,51 @@ redraw(void)
 	} while (it != first);
 }
 
+/*
+ * freeitems -- recursively free the list of items. First call should be
+ * freeitems(NULL).
+ */
+static void
+freeitems(struct item *it)
+{
+	if (!it)
+		it = first;
+	else if (it == first)
+		return;
+
+	freeitems(it->next);
+	free(it);
+}
+
+/* cleanup -- free allocated resources. */
+static void
+cleanup(void)
+{
+	Colormap cmap = DefaultColormap(dpy, screen);
+	Visual *vis = DefaultVisual(dpy, screen);
+
+	freeitems(NULL);
+
+	XftFontClose(dpy, font);
+
+	XFreeColors(dpy, cmap, pixels, PIXEL_N, 0);
+	XftColorFree(dpy, vis, cmap, &c_fg);
+	XftColorFree(dpy, vis, cmap, &c_sbg);
+	XftColorFree(dpy, vis, cmap, &c_sfg);
+
+	XUngrabKeyboard(dpy, CurrentTime);
+	XUngrabPointer(dpy, CurrentTime);
+	
+	XCloseDisplay(dpy);
+}
+
 /* succeed -- exit successfully. If print is true, also print selected item. */
 static void
 succeed(bool print)
 {
 	if (print && selected)
 		puts(selected->s);
+	cleanup();
 	exit(0);
 }
 
@@ -398,10 +444,10 @@ setupx(int n)
 	if (o_y + height*n > DisplayHeight(dpy, screen))
 		o_y = DisplayHeight(dpy, screen) - height*n;
 
-	alloccol(o_bc, &col);
-	swa.border_pixel = col.pixel;
 	alloccol(o_bg, &col);
-	swa.background_pixel = col.pixel;
+	pixels[PIXEL_BG] = swa.background_pixel = col.pixel;
+	alloccol(o_bc, &col);
+	pixels[PIXEL_BC] = swa.border_pixel = col.pixel;
 
 	win = XCreateWindow(dpy, RootWindow(dpy, screen), o_x, o_y,
 	    width, n*height, o_bw, CopyFromParent, CopyFromParent,
