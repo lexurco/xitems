@@ -87,8 +87,8 @@ static int o_hp = -1, o_vp = -1;
 static Display *dpy = NULL;
 static int screen;
 static Window win;
-static GC gc_sel, gc_norm;
-static Pixmap pm_sel, pm_norm; /* background pixmaps */
+static GC gc;
+static XColor c_fg, c_sbg, c_sfg;
 static XFontStruct *font;
 static int height, width; /* height and width of one item */
 
@@ -125,18 +125,16 @@ redraw(void)
 
 	do {
 		if (it->dirty) {
-			GC gc;
-			Pixmap pm;
+			XClearArea(dpy, win, 0, y, width, height, False);
 
 			if (it == selected) {
-				gc = gc_sel;
-				pm = pm_sel;
-			} else {
-				gc = gc_norm;
-				pm = pm_norm;
-			}
+				XSetForeground(dpy, gc, c_sbg.pixel);
+				XFillRectangle(dpy, win, gc, 0, y,
+				    width, height);
+				XSetForeground(dpy, gc, c_sfg.pixel);
+			} else
+				XSetForeground(dpy, gc, c_fg.pixel);
 
-			XCopyArea(dpy, pm, win, gc, 0, 0, width, height, 0, y);
 			XDrawString(dpy, win, gc, o_hp, y + o_vp+font->ascent,
 			    it->s, it->len);
 
@@ -339,6 +337,14 @@ setfocus(void)
 	die(1, "couldn't grab keyboard");
 }
 
+static void
+alloccol(char *s, XColor *c)
+{
+	XColor dummy;
+	if (!(XAllocNamedColor(dpy, DefaultColormap(dpy, screen), s, c, &dummy)))
+		die(1, "couldn't allocate colour %s\n", s);
+}
+
 /*
  * setupx -- create and map a window for n items; assign values to the X
  * globals.
@@ -348,7 +354,7 @@ setupx(int n)
 {
 	struct item *it;
 	XGCValues gcv;
-	XColor col, dummy;
+	XColor col;
 	XClassHint ch = {PROGNAME, PROGNAME};
 	XSetWindowAttributes swa = {
 		.override_redirect = True,
@@ -375,9 +381,9 @@ setupx(int n)
 	if (o_y + height*n > DisplayHeight(dpy, screen))
 		o_y = DisplayHeight(dpy, screen) - height*n;
 
-	XAllocNamedColor(dpy, DefaultColormap(dpy, screen), o_bc, &col, &dummy);
+	alloccol(o_bc, &col);
 	swa.border_pixel = col.pixel;
-	XAllocNamedColor(dpy, DefaultColormap(dpy, screen), o_bg, &col, &dummy);
+	alloccol(o_bg, &col);
 	swa.background_pixel = col.pixel;
 
 	win = XCreateWindow(dpy, RootWindow(dpy, screen), o_x, o_y,
@@ -386,34 +392,11 @@ setupx(int n)
 		CWEventMask | CWSaveUnder, &swa);
 	XSetClassHint(dpy, win, &ch);
 
-	/*
-	 * Foreground here means the colour with which to draw the background
-	 * pixmap, i.e. the actual background colour.
-	 */
-	gcv.foreground = col.pixel;
-	gc_norm = XCreateGC(dpy, win, GCForeground, &gcv);
-	XAllocNamedColor(dpy, DefaultColormap(dpy, screen), o_sbg, &col,
-	    &dummy);
-	gcv.foreground = col.pixel;
-	gc_sel = XCreateGC(dpy, win, GCForeground, &gcv);
+	alloccol(o_sbg, &c_sbg);
+	alloccol(o_sfg, &c_sfg);
+	alloccol(o_fg, &c_fg);
 
-	pm_sel = XCreatePixmap(dpy, win, width, height,
-	    DefaultDepth(dpy, screen));
-	pm_norm = XCreatePixmap(dpy, win, width, height,
-	    DefaultDepth(dpy, screen));
-	XFillRectangle(dpy, pm_sel, gc_sel, 0, 0, width, height);
-	XFillRectangle(dpy, pm_norm, gc_norm, 0, 0, width, height);
-
-	/*
-	 * Since the background pixmaps are already created, the GCs can be
-	 * reused for text.
-	 */
-	XAllocNamedColor(dpy, DefaultColormap(dpy, screen), o_fg, &col,
-	    &dummy);
-	XSetForeground(dpy, gc_norm, col.pixel);
-	XAllocNamedColor(dpy, DefaultColormap(dpy, screen), o_sfg, &col,
-	    &dummy);
-	XSetForeground(dpy, gc_sel, col.pixel);
+	gc = XCreateGC(dpy, win, 0, &gcv);
 
 	grabkb();
 	grabptr();
