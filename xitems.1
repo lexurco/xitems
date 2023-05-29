@@ -1,0 +1,172 @@
+.Dd May 29, 2023
+.Dt XITEMS 1
+.Os
+.Sh NAME
+.Nm xitems
+.Nd menu for X
+.Sh SYNOPSIS
+.Nm
+.Op Fl font Ar font
+.Op Fl bg Ar colour
+.Op Fl fg Ar colour
+.Op Fl sbg Ar colour
+.Op Fl sfg Ar colour
+.Op Fl bc Ar colour
+.Op Fl bw Ar width
+.Op Fl hp Ar pad
+.Op Fl vp Ar pad
+.Op Fl x Ar x
+.Op Fl y Ar x
+.Sh DESCRIPTION
+The X utility
+.Nm
+draws a menu, based on stdin
+(here refer to a later section)
+and prints the user's choice to stdout.
+The options are as follows:
+.Bl -tag -width Ds
+.It Fl font Ar font
+The font to be used for displaying text.
+Corresponds to the resource font.
+Default is
+.Dq fixed .
+.It Fl bg Ar colour
+Specifies the normal background colour.
+Corresponds to the resource background.
+Default is
+.Dq white .
+.It Fl fg Ar colour
+Specifies the normal foreground colour.
+Corresponds to the resource foreground.
+Default is
+.Dq black .
+.It Fl sbg Ar colour
+Specifies the background colour for selected item.
+Corresponds to the resource selectedBackground.
+Default is
+.Dq black .
+.It Fl sfg Ar colour
+Specifies the foreground colour for selected item.
+Corresponds to the resource selectedForeground.
+Default is
+.Dq white .
+.It Fl bc Ar colour
+Specifies the border colour.
+Corresponds to the resource borderColour.
+Default is
+.Dq black .
+.It Fl bw Ar width
+Specifies the border width.
+Corresponds to the resource borderWidth.
+Default is 1.
+.It Fl hp Ar pad
+Specifies the horizontal padding.
+Corresponds to the resource horizontalPadding.
+Default is 2.
+.It Fl vp Ar pad
+Specifies the vertical padding.
+Corresponds to the resource verticalPadding.
+Default is 1.
+.It Fl x Ar x
+The horizontal position to spawn the window at.
+Default corresponds to the horizontal position of the pointer.
+.It Fl y Ar y
+The vertical position to spawn the window at.
+Default corresponds to the vertical position of the pointer.
+.El
+.Pp
+The options, which correspond to a resource take precedence over that
+resource.
+.Pp
+.Nm
+reads contents of the menu on stdin.
+The input consists of one, or several newline-separated entries (items).
+Each entry has the following format:
+.Pp
+.Dl ITEM := [KEYS] TAB LABEL
+.Pp
+The optional KEYS field consists of one or more space-separated key
+strings, such that can be used with
+.Xr XStringToKeysym 3 .
+Pressing any of these keys immediately select this item.
+Keys are configured case-insensitively.
+.Ss Key and button bindings
+.Nm
+can be intuitively controlled with mouse by bringing the pointer over
+the desired item and clicking.
+Additional key and button bindings are as follows:
+.Bl -tag -width Ds
+.It Scroll down , j , down , control-n
+Move selection one item down.
+.It Scroll up , k , up , control-p
+Move selection one item up.
+.It Escape , control-c
+Quit, outputting nothing.
+.It Return , control-m , control-j
+Quit, outputting the selected item.
+.It Button 1, button 2, button 3
+Quit.
+If the pointer is inside the window, output the selected item,
+otherwise output nothing.
+.El
+.Sh RESOURCES
+.Nm
+understands the following resources:
+.Bl -tag -width Ds
+.It Ic xitems.font
+Specifies the font to be used for displaying text.
+.It Ic xitems.foreground , xitems,background
+Specifies the normal foreground and background colours.
+.It Ic xitems.selectedForeground , xitems,selectedBackground
+Specifies the foreground and background colours for selected items.
+.It Ic xitems.borderColour
+Specifies the border colour.
+.It Ic xitems.borderWidth
+Specifies the border width.
+.It Ic xitems.verticalPadding , xitems.horizontalPadding
+Specifies the vertical and horizontal padding.
+.El
+.Sh EXAMPLES
+The following script displays a menu with items
+.Dq Monitor ,
+.Dq xTerm
+and
+.Dq xCalc .
+Each can be selected by pressing the key, corresponding to the capital
+letter, or the Cyrillic key, sharing the same position.
+Selecting
+.Dq Monitor
+creates a similar menu, and selecting anything else runs the
+corresponding command.
+.Bd -literal -offset indent
+#!/bin/sh
+
+topmenu() {
+	xitems <<-x
+m Cyrillic_softsign	Monitor
+t Cyrillic_e	xTerm
+e Cyrillic_u	xCalc
+	x
+}
+
+monitormenu() {
+	xitems <<-x
+b Cyrillic_i	xBiff
+c Cyrillic_es	xConsole
+	x
+}
+
+s=$(topmenu)
+
+[ -z "$s" ] && exit
+
+if [ "$s" = Monitor ]; then
+	monitormenu
+else
+	echo $s
+fi | tr '[A-Z]' '[a-z]' | sh
+.Ed
+.Sh AUTHORS
+.An Alexander Arkhipov Aq Mt aa@manpager.net .
+.Sh EXIT STATUS
+.Ex -std
