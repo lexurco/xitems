@@ -99,6 +99,22 @@ static XftFont *font;
 static XftColor c_fg, c_sfg, c_sbg;
 static unsigned long pixels[PIXEL_N];
 
+/*
+ * freeitems -- recursively free the list of items. First call should be
+ * freeitems(NULL).
+ */
+static void
+freeitems(struct item *it)
+{
+	if (!it)
+		it = first;
+	else if (it == first)
+		return;
+
+	freeitems(it->next);
+	free(it);
+}
+
 /* selpos -- mark the item at position y (from top) as selected. */
 static void
 selpos(int y)
@@ -121,6 +137,37 @@ selpos(int y)
 end:
 	if (unselected != selected)
 		unselected->dirty = selected->dirty = true;
+}
+
+/* inbounds -- check if point y is within the bounds of line going from top. */
+static bool
+inbounds(int y, int top, int height)
+{
+	return y >= top && y <= top+height;
+}
+
+/* expose -- mark exposed items as dirty. */
+static void
+expose(XExposeEvent e)
+{
+	struct item *it = first;
+	int y = 0;
+
+	do {
+		/*
+		 * If either end of e's vertical part is within the bounds
+		 * of the item, there is at least some collision. Conversely,
+		 * if either of the item's vertical ends is within e's bounds,
+		 * they must collide.
+		 */
+		int bot = y+height, e_bot = e.y+e.height;
+		if (inbounds(e.y, y, bot) || inbounds(e_bot, y, bot) ||
+		    inbounds(y, e.y, e_bot) || inbounds(bot, e.y, e_bot))
+			it->dirty = true;
+
+		y += height;
+		it = it->next;
+	} while (it != first);
 }
 
 /* redraw -- redraw the entire window. */
@@ -158,22 +205,6 @@ redraw(void)
 		y += height;
 		it = it->next;
 	} while (it != first);
-}
-
-/*
- * freeitems -- recursively free the list of items. First call should be
- * freeitems(NULL).
- */
-static void
-freeitems(struct item *it)
-{
-	if (!it)
-		it = first;
-	else if (it == first)
-		return;
-
-	freeitems(it->next);
-	free(it);
 }
 
 /* cleanup -- free allocated resources. */
@@ -268,6 +299,9 @@ proc(void)
 		selpos(ev.xbutton.y);
 		/* FALLTHRU */
 	case Expose:
+		expose(ev.xexpose);
+		if (ev.xexpose.count)
+			break;
 		redraw();
 		break;
 	case LeaveNotify:
@@ -396,7 +430,7 @@ alloccol_xft(char *s, XftColor *c)
 {
 	if (!(XftColorAllocName(dpy, DefaultVisual(dpy, screen),
 	    DefaultColormap(dpy, screen), s, c)))
-		die(1, "couldn't allocate Xft colour %s\n", s);
+		die(1, "couldn't allocate Xft colour %s", s);
 }
 
 /* alloccol -- safely allocate new colour c from string s. */
@@ -405,7 +439,7 @@ alloccol(char *s, XColor *c)
 {
 	XColor dummy;
 	if (!(XAllocNamedColor(dpy, DefaultColormap(dpy, screen), s, c, &dummy)))
-		die(1, "couldn't allocate colour %s\n", s);
+		die(1, "couldn't allocate colour %s", s);
 }
 
 /*
@@ -506,9 +540,9 @@ insitem(struct item *it, char *s) {
 		*end = '\0';
 
 		if ((ks = XStringToKeysym(p)) == NoSymbol)
-			warn("no such keysym: %s\n", p);
+			warn("no such keysym: %s", p);
 		else if (new->nks >= MAXKS)
-			warn("too many keysyms (%s)\n", p);
+			warn("too many keysyms (%s)", p);
 		else {
 			KeySym k, dummy;
 			XConvertCase(ks, &k, &dummy);
