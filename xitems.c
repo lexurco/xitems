@@ -12,6 +12,7 @@
 #include <X11/Xutil.h>
 #include <X11/Xos.h>
 #include <X11/Xatom.h>
+#include <X11/Xft/Xft.h>
 
 #define PROGNAME "xitems"
 #define MAXKS 32
@@ -87,10 +88,9 @@ static int o_hp = -1, o_vp = -1;
 static Display *dpy = NULL;
 static int screen;
 static Window win;
-static GC gc;
-static XColor c_fg, c_sbg, c_sfg;
-static XFontStruct *font;
 static int height, width; /* height and width of one item */
+static XftFont *font;
+static XftColor c_fg, c_sfg, c_sbg;
 
 /* selpos -- mark the item at position y (from top) as selected. */
 static void
@@ -123,20 +123,27 @@ redraw(void)
 	struct item *it = first;
 	int y = 0;
 
+	static XftDraw *d = NULL;
+
+	if (!d && !(d = XftDrawCreate(dpy, win, DefaultVisual(dpy, screen),
+	    DefaultColormap(dpy, screen))))
+		die(1, "couldn't create XftDraw");
+
 	do {
 		if (it->dirty) {
+			XftColor *xftc;
+
 			XClearArea(dpy, win, 0, y, width, height, False);
 
 			if (it == selected) {
-				XSetForeground(dpy, gc, c_sbg.pixel);
-				XFillRectangle(dpy, win, gc, 0, y,
-				    width, height);
-				XSetForeground(dpy, gc, c_sfg.pixel);
+				xftc = &c_sfg;
+				XftDrawRect(d, &c_sbg, 0, y, width, height);
 			} else
-				XSetForeground(dpy, gc, c_fg.pixel);
+				xftc = &c_fg;
 
-			XDrawString(dpy, win, gc, o_hp, y + o_vp+font->ascent,
-			    it->s, it->len);
+			XftDrawStringUtf8(d, xftc, font,
+			    o_hp, y + o_vp+font->ascent,
+			    (FcChar8 *)it->s, it->len);
 
 			it->dirty = false;
 		}
@@ -337,6 +344,16 @@ setfocus(void)
 	die(1, "couldn't grab keyboard");
 }
 
+/* alloccol_xft -- safely allocate new Xft colour c from string s. */
+static void
+alloccol_xft(char *s, XftColor *c)
+{
+	if (!(XftColorAllocName(dpy, DefaultVisual(dpy, screen),
+	    DefaultColormap(dpy, screen), s, c)))
+		die(1, "couldn't allocate Xft colour %s\n", s);
+}
+
+/* alloccol -- safely allocate new colour c from string s. */
 static void
 alloccol(char *s, XColor *c)
 {
@@ -353,7 +370,6 @@ static void
 setupx(int n)
 {
 	struct item *it;
-	XGCValues gcv;
 	XColor col;
 	XClassHint ch = {PROGNAME, PROGNAME};
 	XSetWindowAttributes swa = {
@@ -364,15 +380,16 @@ setupx(int n)
 		    PointerMotionMask | LeaveWindowMask | EnterWindowMask,
 	};
 
-	if (!(font = XLoadQueryFont(dpy, o_font)))
+	if (!(font = XftFontOpenName(dpy, screen, o_font)))
 		die(1, "couldn't load font");
-	height = font->ascent + font->descent + o_vp;
+	height = font->height + o_vp;
 
 	it = first;
 	do {
-		int w;
-		if ((w = XTextWidth(font, it->s, it->len) + o_hp*2) > width)
-			width = w;
+		XGlyphInfo gi;
+		XftTextExtentsUtf8(dpy, font, (FcChar8 *)it->s, it->len, &gi);
+		if (gi.xOff + o_hp*2 > width)
+			width = gi.xOff + o_hp*2;
 		it = it->next;
 	} while (it != first);
 
@@ -392,11 +409,9 @@ setupx(int n)
 		CWEventMask | CWSaveUnder, &swa);
 	XSetClassHint(dpy, win, &ch);
 
-	alloccol(o_sbg, &c_sbg);
-	alloccol(o_sfg, &c_sfg);
-	alloccol(o_fg, &c_fg);
-
-	gc = XCreateGC(dpy, win, 0, &gcv);
+	alloccol_xft(o_fg, &c_fg);
+	alloccol_xft(o_sfg, &c_sfg);
+	alloccol_xft(o_sbg, &c_sbg);
 
 	grabkb();
 	grabptr();
@@ -619,7 +634,7 @@ main(int argc, char *argv[])
 	if (!o_fg)
 		o_fg = sdefault("foreground", "black");
 	if (!o_font)
-		o_font = sdefault("font", "fixed");
+		o_font = sdefault("font", "DejaVu Sans Mono-10");
 	if (!o_sbg)
 		o_sbg = sdefault("selectedBackground", "black");
 	if (!o_sfg)
