@@ -1,3 +1,12 @@
+0.3
+
+- Fixed bug where moving pointer over a new item didn't redraw the
+  window.
+- xitems is now pledge()d on OpenBSD.
+- Removed the config.mk file: typing things like
+  `make CFLAGS="-extra -flags"' now makes sense, and packaging should
+  be easier.
+
 0.2.1
 
 Minor update: xitems now correctly redraws in the unlikely event of
