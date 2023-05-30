@@ -42,7 +42,7 @@ clean:
 
 dist: clean
 	mkdir xitems$(V)
-	cp $(SRC) $(MAN) README COPYING CHANGES Makefile config.mk version.mk \
+	cp $(SRC) $(MAN) README COPYING CHANGES Makefile version.mk \
 	    xitems$(V)
 	tar cf - xitems$(V) | gzip >xitems$(V).tar.gz
 	rm -rf xitems$(V)

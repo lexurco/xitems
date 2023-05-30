@@ -313,10 +313,12 @@ proc(void)
 	switch (ev.type) {
 	case EnterNotify:
 		inwin = true;
-		/* FALLTHRU */
+		redraw();
+		break;
 	case MotionNotify:
 		selpos(ev.xbutton.y);
-		/* FALLTHRU */
+		redraw();
+		break;
 	case Expose:
 		expose(ev.xexpose);
 		if (ev.xexpose.count)
