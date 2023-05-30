@@ -1,32 +1,41 @@
-include config.mk
 include version.mk
-
-.SUFFIXES: .o .c
 
 BIN = xitems
 OBJ = $(BIN:=.o)
 SRC = $(BIN:=.c)
 MAN = $(BIN:=.1)
 
+PREFIX ?= $(DESTDIR)/usr/local
+MANPREFIX ?= $(PREFIX)/man
+X11BASE ?= /usr/X11R6
+X11INC ?= $(X11BASE)/include
+X11LIB ?= $(X11BASE)/lib
+FREETYPEINC ?= $(X11INC)/freetype2
+FREETYPELIBS ?= -lfontconfig -lXft
+
+INCS = -I$(X11INC) -I$(FREETYPEINC)
+LIBS = -L$(X11LIB) -lX11 $(FREETYPELIBS)
+
+bindir = $(PREFIX)/bin
+man1dir = $(MANPREFIX)/man1
+
 all: $(BIN)
 
 $(BIN): $(OBJ)
-	$(CC) $(CFLAGS) $(PCCFLAGS) -o $@ $(OBJ) $(LDFLAGS)
-
-$(OBJ): config.mk
+	$(CC) -o $@ $(OBJ) $(LIBS) $(LDFLAGS)
 
 .c.o:
-	$(CC) $(CFLAGS) $(CPPFLAGS) -c $<
+	$(CC) -std=c99 -pedantic $(INCS) $(CFLAGS) $(CPPFLAGS) -c $<
 
 install: all
-	mkdir -p $(DESTDIR)$(PREFIX)/bin
-	install -m 755 $(BIN) $(DESTDIR)$(PREFIX)/bin
-	mkdir -p $(DESTDIR)$(MANPREFIX)/man1
-	install -m 644 $(MAN) $(DESTDIR)$(MANPREFIX)/man1
+	mkdir -p $(bindir)
+	install -m 755 $(BIN) $(bindir)
+	mkdir -p $(man1dir)
+	install -m 644 $(MAN) $(man1dir)
 
 uninstall:
-	cd $(DESTDIR)$(PREFIX)/bin && rm -f $(BIN)
-	cd $(DESTDIR)$(MANPREFIX)/man1 && rm -f $(MAN)
+	cd $(bindir) && rm -f $(BIN)
+	cd $(man1dir) && rm -f $(MAN)
 
 clean:
 	-rm -rf $(BIN) $(OBJ) xitems$(V) *.tar.gz *.core
