@@ -2,9 +2,7 @@ xitems is a menu utility for X, it can be controled with keyboard and with
 mouse. A list of items, along with an optional list of keys for quick selection
 is read on stdin. The chosen item is printed on stdout.
 
-To install, please modify config.mk, as necessary and run `make', followed by
-`make install' (possibly as root):
+To install, run `make', followed by `make install' (possibly as root):
 
-	$ $EDITOR config.mk
 	$ make
 	# make install
