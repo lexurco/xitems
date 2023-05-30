@@ -43,6 +43,25 @@ die(int eval, const char *fmt, ...)
 	exit(eval);
 }
 
+/* edie -- same as die(), but also output a message via strerror(). */
+static void
+edie(int eval, const char *fmt, ...)
+{
+	int xerrno = errno;
+
+	fputs(PROGNAME ": ", stderr);
+	if (fmt) {
+		va_list argp;
+		va_start(argp, fmt);
+		vfprintf(stderr, fmt, argp);
+		va_end(argp);
+	}
+	fprintf(stderr, ": %s", strerror(xerrno));
+
+	fputc('\n', stderr);
+	exit(eval);
+}
+
 /* warn -- print formatted string to stderr. */
 static void
 warn(const char *fmt, ...)
@@ -707,6 +726,13 @@ main(int argc, char *argv[])
 
 	if (!(dpy = XOpenDisplay(NULL)))
 		die(1, "couldn't open display");
+
+#ifdef __OpenBSD__
+	/* Xlib needs rpath at runtime. */
+	if (pledge("stdio rpath", NULL) == -1)
+		edie(1, "pledge");
+#endif
+
 	screen = DefaultScreen(dpy);
 
 	if (!o_bg)
